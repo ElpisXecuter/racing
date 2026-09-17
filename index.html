@@ -427,9 +427,9 @@
   var pts = resample(relax(chaikin(controlPts, 4), 26, 0.5), 300);
   var N = pts.length;
 
-  var TRACK_WIDTH = 160;
+  var TRACK_WIDTH = 170;
   var HALF_WIDTH = TRACK_WIDTH / 2;
-  var CAR_RADIUS = 10;
+  var CAR_RADIUS = 17;
 
   function seg(i) {
     var a = pts[i], b = pts[(i + 1) % N];
@@ -1115,7 +1115,7 @@
     group.add(tub);
 
     // long tapering nose
-    var nose = new THREE.Mesh(new THREE.ConeGeometry(1.7, 24, 8), navyMat);
+    var nose = new THREE.Mesh(new THREE.ConeGeometry(5, 24, 8), navyMat);
     nose.rotation.z = -Math.PI / 2;
     nose.position.set(20, 5, 0);
     group.add(nose);
@@ -2329,24 +2329,24 @@
   var MAX_REVERSE = 60 * GROUND_COVERAGE_MULT;       // ~32 km/h in reverse
   // Torque curve: a hard shove off the line that falls away steeply, plus a
   // small constant tail so the last 40 km/h still arrives on a long straight.
-  var ACCEL_PEAK = 26 / MPS_PER_UNIT;       // ~2.65g at a standing start
-  var ACCEL_TAIL = 5.0 / MPS_PER_UNIT;      // what's left once you're near Vmax
-  var ACCEL_FALLOFF = 1.75;                 // higher = accel dies off sooner
-  var BRAKE_DECEL = 48 / MPS_PER_UNIT;      // ~4.9g braking
+  var ACCEL_PEAK = 15 / MPS_PER_UNIT;       // ~2.65g at a standing start
+  var ACCEL_TAIL = 2 / MPS_PER_UNIT;      // what's left once you're near Vmax
+  var ACCEL_FALLOFF = 0.75;                 // lower = accel dies off sooner (or becomes smoothed out)
+  var BRAKE_DECEL = 30 / MPS_PER_UNIT;      // ~4.9g braking
   var REVERSE_ACCEL = 5 / MPS_PER_UNIT;
   var DRAG_DECEL = 2.2 / MPS_PER_UNIT;      // gentle engine braking/rolling resistance
   // Higher TURN_RATE = tighter turning circle (turns the car more per second).
   var TURN_RATE = 2.75;
   var STEER_IN = 4.25;
   var STEER_OUT = 7.0;
-  var GRASS_GRIP_BASE = 0.02, TRACK_GRIP_BASE = 0.0004;
+  var GRASS_GRIP_BASE = 0.02, TRACK_GRIP_BASE = 0.0004;   //Genuinley what does this do? lower number == more grip?
   var OFFTRACK_DRAG = 0.1; // extra speed scrub while off the tarmac
   // Cornering grip. These aren't real tire g-forces -- TURN_RATE below is
   // already an arcade-fast turn rate -- they're calibrated against it so that
   // holding full steering lock stays safe up to a normal cornering speed and
   // starts costing you the corner above that, the harder the faster you are.
   var CORNER_GRIP_TRACK = 90 / MPS_PER_UNIT;   // grip ceiling on tarmac
-  var CORNER_GRIP_GRASS = 10 / MPS_PER_UNIT;   // much less once you're off it
+  var CORNER_GRIP_GRASS = 20 / MPS_PER_UNIT;   // much less once you're off it
   var CORNER_SCRUB = 3 / MPS_PER_UNIT;         // gentle speed bleed while cornering hard, even within grip
   var SLIDE_SCRUB = 12 / MPS_PER_UNIT;         // sharp extra speed bleed once the tires actually break loose
   var SLIP_GRIP_BASE = 0.1;                   // how loose the rear feels once it's sliding
@@ -2371,7 +2371,8 @@
       // circuit's longest straight -- 360 is real and reachable, but only
       // there, never out of a slow corner.
       var speedFrac = clamp(Math.abs(car.vf) / MAX_SPEED, 0, 1);
-      var curveAccel = ACCEL_PEAK * Math.pow(1 - speedFrac, ACCEL_FALLOFF) + ACCEL_TAIL;
+      var curveAccel = ACCEL_PEAK * (1 - Math.pow(speedFrac, ACCEL_FALLOFF)) + ACCEL_TAIL;
+      //var curveAccel = ACCEL_PEAK * Math.pow(1 - speedFrac, ACCEL_FALLOFF) + ACCEL_TAIL;
       car.vf += curveAccel * accelMul * dt;
     } else if (keys.down) {
       if (car.vf > 5) car.vf -= BRAKE_DECEL * dt;
@@ -2388,16 +2389,15 @@
     // acceleration above, so running wide costs you even at full throttle
     if (isOffTrack) {
       car.vf -= car.vf * OFFTRACK_DRAG * dt;
-      OFFTRACK_TIME -= 0.01;
-      if (OFFTRACK_TIME < 0.1){
-        OFFTRACK_TIME = 0.1;
+      OFFTRACK_TIME -= 0.1;
+      if (OFFTRACK_TIME < 0.2){
+        OFFTRACK_TIME = 0.2;
       }
-    else {
-      OFFTRACK_TIME += 0.01;
+    } else {
+      OFFTRACK_TIME += 0.001;
       if (OFFTRACK_TIME > 1) {
-        OFFTRACK_TIME == 1;
+        OFFTRACK_TIME = 1;
       }
-    }
     }
 
     var steerTarget = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
@@ -2590,7 +2590,7 @@
         if (standingsAccum >= 0.2) { standingsAccum = 0; renderStandings(); }
       }
     }
-
+    
     requestAnimationFrame(frame);
   }
 
