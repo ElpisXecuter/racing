@@ -2331,7 +2331,7 @@
   // small constant tail so the last 40 km/h still arrives on a long straight.
   var ACCEL_PEAK = 26 / MPS_PER_UNIT;       // ~2.65g at a standing start
   var ACCEL_TAIL = 5.0 / MPS_PER_UNIT;      // what's left once you're near Vmax
-  var ACCEL_FALLOFF = 1.25;                 // higher = accel dies off sooner
+  var ACCEL_FALLOFF = 1.75;                 // higher = accel dies off sooner
   var BRAKE_DECEL = 48 / MPS_PER_UNIT;      // ~4.9g braking
   var REVERSE_ACCEL = 5 / MPS_PER_UNIT;
   var DRAG_DECEL = 2.2 / MPS_PER_UNIT;      // gentle engine braking/rolling resistance
@@ -2340,16 +2340,17 @@
   var STEER_IN = 4.25;
   var STEER_OUT = 7.0;
   var GRASS_GRIP_BASE = 0.02, TRACK_GRIP_BASE = 0.0004;
-  var OFFTRACK_DRAG = 0.9; // extra speed scrub while off the tarmac
+  var OFFTRACK_DRAG = 0.1; // extra speed scrub while off the tarmac
   // Cornering grip. These aren't real tire g-forces -- TURN_RATE below is
   // already an arcade-fast turn rate -- they're calibrated against it so that
   // holding full steering lock stays safe up to a normal cornering speed and
   // starts costing you the corner above that, the harder the faster you are.
   var CORNER_GRIP_TRACK = 90 / MPS_PER_UNIT;   // grip ceiling on tarmac
-  var CORNER_GRIP_GRASS = 35 / MPS_PER_UNIT;   // much less once you're off it
+  var CORNER_GRIP_GRASS = 10 / MPS_PER_UNIT;   // much less once you're off it
   var CORNER_SCRUB = 3 / MPS_PER_UNIT;         // gentle speed bleed while cornering hard, even within grip
   var SLIDE_SCRUB = 12 / MPS_PER_UNIT;         // sharp extra speed bleed once the tires actually break loose
-  var SLIP_GRIP_BASE = 0.22;                   // how loose the rear feels once it's sliding
+  var SLIP_GRIP_BASE = 0.1;                   // how loose the rear feels once it's sliding
+  var OFFTRACK_TIME = 1;                      //Made by a human - tracks time spent off track
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   function update(dt) {
@@ -2387,6 +2388,16 @@
     // acceleration above, so running wide costs you even at full throttle
     if (isOffTrack) {
       car.vf -= car.vf * OFFTRACK_DRAG * dt;
+      OFFTRACK_TIME -= 0.01;
+      if (OFFTRACK_TIME < 0.1){
+        OFFTRACK_TIME = 0.1;
+      }
+    else {
+      OFFTRACK_TIME += 0.01;
+      if (OFFTRACK_TIME > 1) {
+        OFFTRACK_TIME == 1;
+      }
+    }
     }
 
     var steerTarget = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
@@ -2406,7 +2417,7 @@
     // itself goes looser for a moment) -- so carrying too much speed into a
     // corner costs you the corner, rather than being free.
     var rawOmega = car.steer * TURN_RATE * lowSpeedFade * (car.vf < 0 ? -1 : 1);
-    var gripLimit = isOffTrack ? CORNER_GRIP_GRASS : CORNER_GRIP_TRACK;
+    var gripLimit = isOffTrack ? CORNER_GRIP_GRASS : CORNER_GRIP_TRACK * OFFTRACK_TIME;
     var requiredLat = Math.abs(car.vf) * Math.abs(rawOmega);
     var overExcess = gripLimit > 0 ? Math.max(0, requiredLat / gripLimit - 1) : 0;
     var actualOmega = rawOmega;
