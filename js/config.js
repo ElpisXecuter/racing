@@ -85,6 +85,12 @@ GAME.Config = {
     { id: 'mph', name: 'mph', mph: true }
   ],
 
+  // ---- Tyre / brake temperature units --------------------------------------
+  tempUnits: [
+    { id: 'C', name: '°C' },
+    { id: 'F', name: '°F' }
+  ],
+
   // ---- Name labels above cars ---------------------------------------------
   labels: { height: 27, opacity: 0.55, scale: [52, 13] }
 };
