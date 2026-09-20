@@ -38,6 +38,32 @@ GAME.Tracks = [
     scenery: { lake: true, lakeShrink: 0.7, city: true, trees: 44, grandstands: 10 }
   },
 
+   {
+    id: 'monza',
+    name: 'Monza',
+    place: 'Italy',
+    available: true,
+    points: [
+    [2500, -650], [1300, -650], [0, -650], [100, -1300], [-2000, -500], [-4000, -1000], 
+    [-3750, -3000], [-4750, -3000], [-4000, -5500], [-2000, -5750], [-1750, -2250], 
+    [-1000, -2500], [0, -2500], [5000, -2500], [5500, -1500], [5000, -750], [4000, -650]
+    ],
+    scenery: { lake: false, lakeShrink: 0.7, city: false, trees: 100, grandstands: 30 }
+  },
+
+   {
+    id: 'redBullRing',
+    name: 'Red Bull Ring',
+    place: 'Austria',
+    available: true,
+    points: [
+    [2500, -650], [1300, -650], [1300, -3000], [1300, -4000], [900, -5250],
+    [4000, -4750], [4000, -4250], [2000, -4000], [2000, -2750], [2500, -3000], 
+    [3000, -3000], [5500, -2750], [5750, -1000], [4000, -650]
+    ],
+    scenery: { lake: false, lakeShrink: 0.7, city: false, trees: 200, grandstands: 10 }
+  },
+
   {
     id: 'testoval',
     name: 'Speedbowl',
