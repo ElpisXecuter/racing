@@ -18,6 +18,7 @@ GAME.State = {
   selectedTrackIndex: 0,
   selectedLiveryIndex: 0,
   selectedUnitIndex: 0,
+  selectedTempUnitIndex: 0,
   lapCount: 0,
   lastLapMs: null,
   bestLapMs: null,
