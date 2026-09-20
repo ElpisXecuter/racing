@@ -3,7 +3,7 @@
    ---------------------------------------------------------------------------
    Sections, top to bottom:
      1. page shell
-     2. race HUD (corner-anchored over the canvas)
+     2. race HUD (corner-anchored over full canvas)
      3. canvas and overlay
      4. buttons and menu controls
      5. multiplayer lobby
@@ -13,8 +13,8 @@
 /* ---- 1. page shell ------------------------------------------------------ */
 * { box-sizing: border-box; }
 html, body {
-  margin: 0; padding: 0; height: 100%;
-  background: radial-gradient(circle at 50% 20%, #1c2430, #0a0d12 70%);
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  background: #0a0d12;
   color: #eef2f6;
   font-family: 'Segoe UI', Arial, sans-serif;
   overflow: hidden;
@@ -22,8 +22,15 @@ html, body {
   user-select: none;
 }
 #wrap {
-  display: flex; flex-direction: column; align-items: center;
-  justify-content: center; height: 100%; padding: 10px;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .hidden { display: none !important; }
 
@@ -67,30 +74,27 @@ html, body {
 }
 .hud-pos-value { font-size: 38px; font-weight: 800; color: #fff; line-height: 1.05; }
 
-#hudBottomRight {
-  position: absolute; bottom: 12px; right: 14px; z-index: 4;
-  text-align: right; pointer-events: none;
-  text-shadow: 0 2px 6px rgba(0,0,0,0.7);
-}
-.hud-speed-value { font-size: 42px; font-weight: 800; color: #fff; line-height: 1; }
-.hud-speed-unit { font-size: 13px; color: rgba(255,255,255,0.7); letter-spacing: 1px; }
-
 /* ---- 3. canvas and overlay ---------------------------------------------- */
 #canvasHolder {
-  position: relative; width: 100%; max-width: 1000px;
-  aspect-ratio: 10 / 7;
-  border-radius: 10px;
-  border: 2px solid rgba(255,255,255,0.15);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  position: absolute;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
   overflow: hidden;
-  background: #8fd0ff;
+  background: #000;
 }
 #canvasHolder canvas { display: block; width: 100% !important; height: 100% !important; }
 #overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   flex-direction: column;
-  background: rgba(5,8,12,0.55);
+  background: rgba(5,8,12,0.65);
+  backdrop-filter: blur(4px);
   text-align: center;
   padding: 20px;
   z-index: 5;
@@ -119,23 +123,6 @@ button.secondary {
 }
 button.secondary:hover { background: rgba(255,255,255,0.1); }
 .race-btn-row { display: flex; gap: 10px; align-items: center; }
-
-#legend { margin-top: 10px; font-size: 12px; color: #7d90a3; text-align: center; }
-kbd {
-  background: #222c38; border: 1px solid #3a4a5c; border-radius: 4px;
-  padding: 1px 6px; margin: 0 2px; font-size: 12px;
-}
-#touch {
-  display: none; margin-top: 10px;
-  grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(2, 56px);
-  gap: 6px; justify-content: center;
-}
-#touch button.tbtn {
-  width: 56px; height: 56px; font-size: 20px; margin: 0;
-  background: rgba(255,255,255,0.12); color: #eef2f6;
-  border: 1px solid rgba(255,255,255,0.25);
-}
-@media (pointer: coarse) { #touch { display: grid; } }
 
 #screenMode, #screenMenu, #screenMultiplayer, #screenHostForm, #screenJoinForm, #screenLobby {
   width: 100%; max-width: 420px; max-height: 100%; overflow-y: auto; padding-right: 4px;
@@ -190,7 +177,7 @@ kbd {
 #scoreBestLine { font-size: 12px; color: #8fa3b8; margin-top: 2px; }
 
 #standings {
-  position: absolute; top: 95px; right: 10px; z-index: 4;
+  position: absolute; top: 95px; right: 12px; z-index: 4;
   min-width: 168px; max-width: 46%;
   padding: 8px 10px 9px 10px;
   background: rgba(8,12,18,0.45);
