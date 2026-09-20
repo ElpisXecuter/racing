@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Circuit Racer 3D</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ==========================================================================
+     Markup only. Every id here is read by one of the modules in js/ — if you
+     rename one, search the js folder for it.
+       HUD          js/hud.js
+       menu screens js/menus.js
+       lobby        js/multiplayer.js
+     ========================================================================== -->
+
+<div id="wrap">
+
+  <div id="canvasHolder">
+    <div id="loadErr">Your browser could not start WebGL, which this 3D game needs.<br>Please update your browser or enable hardware acceleration.</div>
+
+    <!-- lap, lap progress bar and lap times -->
+    <div id="hudTopLeft">
+      <div class="hud-lap-row">
+        <span class="hud-lap-tag">Lap</span>
+        <span class="hud-lap-value" id="lapCount">1 / 3</span>
+      </div>
+      <div class="hud-bar-track"><div class="hud-bar-fill" id="lapBarFill"></div></div>
+      <div class="hud-time-row">Time <span id="curTime">0.00</span></div>
+      <div class="hud-sub-row">
+        <span>Last <span id="lastLap">--</span></span>
+        <span>Best <span id="bestLap">--</span></span>
+      </div>
+    </div>
+
+    <!-- race position (multiplayer only) -->
+    <div id="posBlock" style="display:none;">
+      <div class="hud-pos-label">Position</div>
+      <div class="hud-pos-value" id="posValue">--</div>
+    </div>
+
+    <!-- speedometer -->
+    <div id="hudBottomRight">
+      <div class="hud-speed-value" id="speedValue">0</div>
+      <div class="hud-speed-unit" id="speedUnitLabel">km/h</div>
+    </div>
+
+    <!-- live order (multiplayer only) -->
+    <div id="standings" class="hidden">
+      <div class="standings-title">Positions</div>
+      <div id="standingsList"></div>
+    </div>
+
+    <div id="overlay">
+
+      <!-- mode select -->
+      <div id="screenMode">
+        <h1>Circuit Racer 3D</h1>
+        <p class="menu-sub">Race solo, or against friends online.</p>
+        <button id="spModeBtn">Single Player</button>
+        <button id="mpModeBtn" class="secondary" style="margin-top:10px;">Multiplayer</button>
+      </div>
+
+      <!-- single player setup: lists are filled from tracks.js / liveries.js -->
+      <div id="screenMenu" class="hidden">
+        <h1>Single Player</h1>
+        <p class="menu-sub">Choose your track and livery, then start the race.</p>
+        <div class="menu-section">
+          <div class="menu-label">Track</div>
+          <div class="menu-options" id="trackOptions"></div>
+        </div>
+        <div class="menu-section">
+          <div class="menu-label">Livery</div>
+          <div class="menu-options" id="liveryOptions"></div>
+        </div>
+        <div class="menu-section">
+          <div class="menu-label">Speedometer Units</div>
+          <div class="menu-options" id="unitOptions"></div>
+        </div>
+        <div class="race-btn-row">
+          <button id="startRaceBtn">Start Race</button>
+          <button id="spBackBtn" class="secondary">Back</button>
+        </div>
+      </div>
+
+      <!-- multiplayer entry -->
+      <div id="screenMultiplayer" class="hidden">
+        <h1>Multiplayer</h1>
+        <p class="menu-sub">Uses a free public relay only to connect players — once connected, the race data goes directly between browsers.</p>
+        <button id="hostChooseBtn">Host a Session</button>
+        <button id="joinChooseBtn" style="margin-top:10px;">Join a Session</button>
+        <button id="mpBackBtn" class="secondary" style="margin-top:14px;">Back</button>
+      </div>
+
+      <div id="screenHostForm" class="hidden">
+        <h1>Host a Session</h1>
+        <div class="field-label">Your Name</div>
+        <input id="hostName" class="menu-input" type="text" maxlength="16" placeholder="e.g. Max">
+        <div class="field-label">Session Name</div>
+        <input id="hostSession" class="menu-input" type="text" maxlength="24" placeholder="e.g. friday-night">
+        <div class="field-label">Password (optional)</div>
+        <input id="hostPassword" class="menu-input" type="text" maxlength="24" placeholder="Leave blank for none">
+        <div class="error-text" id="hostError"></div>
+        <div class="race-btn-row">
+          <button id="createSessionBtn">Create Session</button>
+          <button id="hostBackBtn" class="secondary">Back</button>
+        </div>
+      </div>
+
+      <div id="screenJoinForm" class="hidden">
+        <h1>Join a Session</h1>
+        <div class="field-label">Your Name</div>
+        <input id="joinName" class="menu-input" type="text" maxlength="16" placeholder="e.g. Lando">
+        <div class="field-label">Session Name</div>
+        <input id="joinSession" class="menu-input" type="text" maxlength="24" placeholder="e.g. friday-night">
+        <div class="field-label">Password</div>
+        <input id="joinPassword" class="menu-input" type="text" maxlength="24" placeholder="Leave blank if none">
+        <div class="error-text" id="joinError"></div>
+        <div class="race-btn-row">
+          <button id="joinSessionBtn">Join</button>
+          <button id="joinBackBtn" class="secondary">Back</button>
+        </div>
+      </div>
+
+      <div id="screenLobby" class="hidden">
+        <h1 id="lobbyTitle">Session Lobby</h1>
+        <div class="session-info" id="lobbySessionInfo"></div>
+        <div class="menu-section">
+          <div class="menu-label">Drivers</div>
+          <div class="player-list" id="lobbyPlayerList"></div>
+        </div>
+        <div class="menu-section" id="lobbyTrackRow" style="display:none;">
+          <div class="menu-label">Track (host picks for everyone)</div>
+          <select id="lobbyTrackSelect" class="menu-input"></select>
+        </div>
+        <div class="menu-section">
+          <div class="menu-label">Your Livery</div>
+          <select id="lobbyLiverySelect" class="menu-input"></select>
+        </div>
+        <div class="session-info" id="lobbyPing"></div>
+        <div class="error-text" id="lobbyStatusMsg"></div>
+        <div class="race-btn-row">
+          <button id="lobbyStartBtn" style="display:none;">Start Race</button>
+          <button id="lobbyLeaveBtn" class="secondary">Leave Session</button>
+        </div>
+      </div>
+
+      <!-- shown before, during the countdown, and after the race -->
+      <div id="screenRace" class="hidden">
+        <h1 id="ovTitle">Circuit Racer 3D</h1>
+        <p id="ovSub">Press <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> (or arrow keys) to start</p>
+        <div id="countdownNum"></div>
+        <div id="scoreBox" class="hidden">
+          <div id="scoreValue"></div>
+          <div id="scoreBestLine"></div>
+        </div>
+        <div id="resultsBox" class="hidden">
+          <div class="standings-title">Final Classification</div>
+          <div id="resultsList"></div>
+        </div>
+        <div class="race-btn-row">
+          <button id="ovBtn" style="display:none;">Race Again</button>
+          <button id="menuBtn" class="secondary" style="display:none;">Main Menu</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="legend">
+    <kbd>W</kbd> accelerate &nbsp; <kbd>S</kbd> brake / reverse &nbsp; <kbd>A</kbd> turn left &nbsp; <kbd>D</kbd> turn right &nbsp; <kbd>R</kbd> reset
+  </div>
+
+  <div id="touch">
+    <div></div><button class="tbtn" data-k="up">▲</button><div></div>
+    <button class="tbtn" data-k="left">◀</button><button class="tbtn" data-k="down">▼</button><button class="tbtn" data-k="right">▶</button>
+  </div>
+</div>
+
+<!-- libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+<!-- game modules, in dependency order -->
+<script src="js/config.js"></script>          <!-- global settings -->
+<script src="js/tracks.js"></script>          <!-- track coordinates -->
+<script src="js/liveries.js"></script>        <!-- paint schemes -->
+<script src="js/track-geometry.js"></script>  <!-- coordinates -> circuit maths -->
+<script src="js/track-scene.js"></script>     <!-- circuit maths -> meshes -->
+<script src="js/scenery.js"></script>         <!-- stands, trees, lake, city -->
+<script src="js/car-model.js"></script>       <!-- the 3D car -->
+<script src="js/physics.js"></script>         <!-- handling -->
+<script src="js/hud.js"></script>             <!-- on-screen readouts -->
+<script src="js/menus.js"></script>           <!-- screens and pickers -->
+<script src="js/multiplayer.js"></script>     <!-- hosting and joining -->
+<script src="js/game.js"></script>            <!-- ties it all together -->
+
+</body>
+</html>
