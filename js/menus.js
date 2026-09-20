@@ -113,6 +113,22 @@ GAME.Menus = (function () {
     });
   }
 
+  function buildTempUnitMenu() {
+    var container = document.getElementById('tempUnitOptions');
+    container.innerHTML = '';
+    GAME.Config.tempUnits.forEach(function (item, i) {
+      var el = document.createElement('div');
+      el.className = 'menu-opt';
+      el.textContent = item.name;
+      el.addEventListener('click', function () {
+        GAME.State.selectedTempUnitIndex = i;
+        GAME.Physics.setTempUnit(item.id);
+        updateSelectionClasses();
+      });
+      container.appendChild(el);
+    });
+  }
+
   function updateSelectionClasses() {
     var S = GAME.State;
     document.querySelectorAll('#trackOptions .menu-opt').forEach(function (el, i) {
@@ -123,6 +139,9 @@ GAME.Menus = (function () {
     });
     document.querySelectorAll('#unitOptions .menu-opt').forEach(function (el, i) {
       el.classList.toggle('selected', i === S.selectedUnitIndex);
+    });
+    document.querySelectorAll('#tempUnitOptions .menu-opt').forEach(function (el, i) {
+      el.classList.toggle('selected', i === S.selectedTempUnitIndex);
     });
     GAME.Hud.setUnitLabel(GAME.Config.units[S.selectedUnitIndex].name);
     GAME.Game.rebuildPlayerCar();
@@ -185,6 +204,7 @@ GAME.Menus = (function () {
     buildTrackMenu();
     buildLiveryMenu();
     buildUnitMenu();
+    buildTempUnitMenu();
     updateSelectionClasses();
     wireNavigation();
     showScreen('screenMode');
