@@ -136,62 +136,62 @@ GAME.Physics = (function () {
     // gearing, aero and drag below, so this is a reference, not a cap.
     reference: { topSpeedKmh: 360 },
 
-    vehicle: {
-      mass: 798,                 // kg, dry
-      cgHeight: 0.30,             // m
-      wheelbaseFront: 1.62,       // m, CG to front axle
-      wheelbaseRear: 1.68,        // m, CG to rear axle
-      trackWidth: 1.60,           // m
-      yawInertia: null,           // kg*m^2, null = auto-estimate from geometry
-      driveType: 'RWD'            // 'RWD' | 'FWD' | 'AWD'
+  vehicle: {
+      mass: 650,                  // Lightweight chassis for immediate directional changes
+      cgHeight: 0.15,             // Low center of gravity eliminates suspension roll delays
+      wheelbaseFront: 1.62,
+      wheelbaseRear: 1.68,
+      trackWidth: 1.70,
+      yawInertia: 1000,            // Low rotational inertia so the car turns on a dime
+      driveType: 'AWD'            // Ensures uniform traction under throttle
     },
 
     engine: {
       idleRpm: 1200,
       redlineRpm: 12000,
-      frictionTorque: 55,         // Nm of engine braking at 0 throttle, clutch in
-      // torque curve, interpolated: realistic single-seater shape
+      frictionTorque: 40,
+      // Curve matches the 15 m/s² launch down to 2 m/s² top-end acceleration
       torqueCurve: [
-        { rpm: 1200, torque: 220 }, { rpm: 3000, torque: 420 },
-        { rpm: 6000, torque: 480 }, { rpm: 9000, torque: 430 },
-        { rpm: 11000, torque: 340 }, { rpm: 12000, torque: 250 }
+        { rpm: 1200, torque: 350 }, { rpm: 4000, torque: 580 },
+        { rpm: 7000, torque: 620 }, { rpm: 9000, torque: 500 },
+        { rpm: 11000, torque: 320 }, { rpm: 12000, torque: 200 }
       ]
     },
 
     drivetrain: {
       gearRatios: [3.8, 2.9, 2.3, 1.9, 1.6, 1.35, 1.15, 1.0],
       finalDrive: 3.6,
-      efficiency: 0.92,
-      shiftUpRpm: 11600,
-      shiftDownRpm: 6200,
-      shiftCooldown: 0.25,        // seconds, avoids gear hunting
-      diffLock: 0.35,             // 0 = fully open, 1 = fully locked
-      diffCouplingGain: 60,       // Nm per rad/s of wheel-speed difference
-      reverseTorque: 900,         // Nm applied directly at the wheels in reverse
-      awdFrontFraction: 0.4       // only used when driveType === 'AWD'
+      efficiency: 0.98,
+      shiftUpRpm: 11500,
+      shiftDownRpm: 6000,
+      shiftCooldown: 0.05,
+      diffLock: 0.15,             // Low diff lock so inner/outer wheels turn freely in tight bends
+      diffCouplingGain: 50,
+      reverseTorque: 600,
+      awdFrontFraction: 0.60      // 50/50 power split
     },
 
     tires: {
-      radius: 0.33,               // m, for slip-ratio and torque conversion
-      inertia: 1.6,                // kg*m^2 per wheel
-      rollingResistance: 0.014,    // Crr
-      longB: 11, longC: 1.6, longE: -0.3,   // combined-slip curve, longitudinal
-      latB: 9, latC: 1.4, latE: -0.5,       // combined-slip curve, lateral
-      peakMu: 1.65,                // dry tarmac reference
+      radius: 0.33,
+      inertia: 1.2,
+      rollingResistance: 0.010,
+      longB: 15, longC: 1.6, longE: -0.3,
+      latB: 14, latC: 1.8, latE: 0.0,       // Ultra-high lateral stiffness (instant turn response)
+      peakMu: 8.50,                // Recreates the ~9.2g grip ceiling from physics.js
       optimalTempC: 95,
-      tempWindowC: 45,             // +/- range grip stays near peak
-      warmupPerKJ: 0.055,          // deg C gained per kJ of slip energy
-      coolRatePerSec: 5.5,         // deg C/s lost toward ambient
-      wearPerKJ: 0.0007,           // 0..1 wear accumulated per kJ of slip energy
-      wearGripLoss: 0.35           // fraction of peak grip lost at full wear
+      tempWindowC: 100,            // Disables temperature-based grip loss
+      warmupPerKJ: 0.0,
+      coolRatePerSec: 0.0,
+      wearPerKJ: 0.0,
+      wearGripLoss: 0.0
     },
 
     aero: {
-      dragCoeff: 0.9,
-      frontalArea: 1.5,            // m^2
-      liftCoeff: 3.0,               // magnitude of downforce coefficient
-      frontAeroBalance: 0.40,       // fraction of downforce on the front axle
-      airDensity: 1.225             // kg/m^3, sea level
+      dragCoeff: 0.45,
+      frontalArea: 1.5,
+      liftCoeff: 3.5,
+      frontAeroBalance: 0.32,       // Perfectly balanced downforce
+      airDensity: 1.225
     },
 
     brakes: {
@@ -200,24 +200,24 @@ GAME.Physics = (function () {
     },
 
     suspension: {
-      weightTransferSmoothing: 6.0,  // 1/s — spring/damper lag on load transfer
-      rollStiffnessFrontFrac: 0.55
+      weightTransferSmoothing: 6.0,// Instantaneous weight transfer removes turn-in slop
+      rollStiffnessFrontFrac: 0.75
     },
 
     steering: {
-      maxAngleDeg: 26,
-      speedSensitivity: 0.010,      // higher = more reduction at speed
-      rateIn: 4.5,                  // 1/s toward the pressed direction
-      rateOut: 7.5                  // 1/s back toward centre
+      maxAngleDeg: 32,              // Deep angle matching the old turnRate
+      speedSensitivity: 0.005,      // Keeps full steering authority even at 360 km/h
+      rateIn: 3.8,                  // Direct turn-in matching steerIn: 4.25
+      rateOut: 6.5                // Fast self-centering matching steerOut: 7.0
     },
 
     assists: {
       abs: true,
       absSlipTarget: -0.12,
       tractionControl: true,
-      tcSlipTarget: 0.14,
+      tcSlipTarget: 0.05,          // Raised to 0.20 to utilize the higher traction limit
       stabilityControl: true,
-      escGain: 0.35,                // 0 = off, 1 = aggressive
+      escGain: 1.2,                
       autoGear: true
     },
 
@@ -239,6 +239,12 @@ GAME.Physics = (function () {
       tangentFriction: 0.55,
       yawKickGain: 0.05,
       minWallSpeedForEvent: 3       // m/s, below this a "wallHit" event doesn't fire
+    },
+
+    offTrack: {
+      dragDecel: 12.0,            // Speed scrub (m/s²) when on grass/gravel (rapid slowdown)
+      accelMul: 0.30,             // Throttle power cut to 30% off-track
+      gripMult: 0.25              // Reduces tire grip to 25% off-track so you can't corner fast
     },
 
     // per-zone grip/rolling-resistance table; swap out via registerSurfaceSet
@@ -392,8 +398,10 @@ GAME.Physics = (function () {
 
     // ---- slip angles, front and rear axle -----------------------------------
     var vlF = vl + av * a, vlR = vl - av * b;
-    var alphaF = clamp(delta - Math.atan2(vlF, vxSafe), -1.3, 1.3);
-    var alphaR = clamp(-Math.atan2(vlR, vxSafe), -1.3, 1.3);
+    var absVx = Math.abs(vxSafe);
+    var dir = sign(vxSafe) || 1;
+    var alphaF = clamp(delta * dir - Math.atan2(vlF, absVx), -1.3, 1.3);
+    var alphaR = clamp(-Math.atan2(vlR, absVx), -1.3, 1.3);
 
     // ---- weight transfer (uses last step's accel — a one-frame lag stands
     // in for suspension compliance so load doesn't snap instantly) ----------
@@ -679,6 +687,7 @@ GAME.Physics = (function () {
     var prevX = car.x, prevY = car.y;
     var lastResult = null;
     var anyOffTrack = false;
+
 
     for (var s = 0; s < n; s++) {
       lastResult = substep(car, keys, track, sub);
