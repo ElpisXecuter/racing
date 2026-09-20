@@ -49,36 +49,64 @@ GAME.Physics = (function () {
   'use strict';
 
   // =========================================================================
-  // 0. small math helpers
+  // 0. MATHEMATICAL HELPERS & TIRE FORCE FORMULAS
   // =========================================================================
+
+  /** Clamps a value between an inclusive lower and upper bound. */
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  /** Returns the sign of a number (+1, -1, or 0). */
   function sign(v) { return v > 0 ? 1 : (v < 0 ? -1 : 0); }
+
+  /** Linear interpolation between `a` and `b` by factor `t`. */
   function lerp(a, b, t) { return a + (b - a) * t; }
+
+  /** Converts degrees to radians. */
   function deg2rad(d) { return d * Math.PI / 180; }
+
+  /** Fallback utility to prevent NaN/Infinity poisoning in physics calculations. */
   function safeNum(v, fallback) { return (typeof v === 'number' && isFinite(v)) ? v : fallback; }
 
-  // "Magic Formula"-style curve: rises smoothly from 0, peaks at D, then eases
-  // off. Used for both the longitudinal (slip ratio) and lateral (slip angle)
-  // tyre force curves — same shape, different inputs and coefficients.
+  /**
+   * Evaluates the Pacejka Magic Formula (simplified evaluation curve).
+   * Calculates normalized force multiplier based on slip input.
+   *
+   * @param {number} slip - Slip ratio (longitudinal) or Slip angle in radians (lateral).
+   * @param {number} B - Stiffness factor.
+   * @param {number} C - Shape factor.
+   * @param {number} D - Peak value (maximum friction capacity).
+   * @param {number} E - Curvature factor.
+   * @returns {number} Force in Newtons.
+   */
   function pacejka(slip, B, C, D, E) {
     var Bx = B * slip;
     return D * Math.sin(C * Math.atan(Bx - E * (Bx - Math.atan(Bx))));
   }
 
-  // Combines longitudinal and lateral tyre demand onto one friction circle so
-  // a wheel can never produce more total grip than muEff*Fz, whichever
-  // direction it's asked to work in — this is what makes trail-braking into a
-  // corner, or flooring it mid-corner, cost you the corner.
+  /**
+   * Combines longitudinal and lateral tire forces using friction ellipse scaling.
+   * Prevents total vector force from exceeding available friction capacity (mu * Fz).
+   *
+   * @param {number} kappa - Longitudinal slip ratio.
+   * @param {number} alpha - Lateral slip angle (radians).
+   * @param {number} Fz - Normal vertical load on tire (N).
+   * @param {number} muEff - Effective friction coefficient.
+   * @param {Object} tp - Tire parameter tuning block.
+   * @returns {{Fx: number, Fy: number}} Longitudinal and lateral force vector components.
+   */
   function combinedTireForce(kappa, alpha, Fz, muEff, tp) {
     var cap = Math.max(muEff * Fz, 1e-4);
     var Fx0 = pacejka(kappa, tp.longB, tp.longC, cap, tp.longE);
     var Fy0 = pacejka(alpha, tp.latB, tp.latC, cap, tp.latE);
+    
+    // Friction circle normalization
     var fxN = Fx0 / cap, fyN = Fy0 / cap;
     var mag = Math.hypot(fxN, fyN);
     if (mag > 1) { fxN /= mag; fyN /= mag; }
     return { Fx: fxN * cap, Fy: fyN * cap };
   }
 
+  /** Interpolates torque output based on current engine RPM using piecewise torque curve points. */
   function interpCurve(curve, x) {
     if (x <= curve[0].rpm) return curve[0].torque;
     for (var i = 1; i < curve.length; i++) {
@@ -91,23 +119,29 @@ GAME.Physics = (function () {
   }
 
   // =========================================================================
-  // 1. surfaces — pluggable per-zone grip/rolling-resistance/roughness
+  // 1. SURFACE ZONES & ENVIRONMENT GRIP MODIFIERS
   // =========================================================================
+
+  /** Surface parameter registry defining grip, rolling resistance, and roughness per terrain type. */
   var SURFACE_SETS = {
     default: {
       tarmac: { muMul: 1.00, rollMul: 1.0, bumpiness: 0.00 },
-      curb: { muMul: 0.88, rollMul: 1.2, bumpiness: 0.45 },
-      runoff: { muMul: 0.55, rollMul: 1.9, bumpiness: 0.18 },
-      gravel: { muMul: 0.35, rollMul: 2.6, bumpiness: 0.30 }
+      curb:   { muMul: 0.88, rollMul: 1.2, bumpiness: 0.35 },
+      runoff: { muMul: 0.70, rollMul: 1.5, bumpiness: 0.15 },
+      gravel: { muMul: 0.55, rollMul: 2.0, bumpiness: 0.25 }
     }
   };
+
+  /** Registers custom surface sets for specific track profiles. */
   function registerSurfaceSet(name, defs) { SURFACE_SETS[name] = defs; }
+
+  /** Resolves the surface dictionary applicable to the active track instance. */
   function surfaceSetFor(track) {
     var name = track && track.def && track.def.surfaceSet;
     return (name && SURFACE_SETS[name]) || SURFACE_SETS.default;
   }
-  // Which zone a point on/near the track falls into, using the boundaries
-  // track-geometry.js already computes (HALF_WIDTH/CURB_HW/RUNOFF_HW/BARRIER_HW).
+
+  /** Determines current surface zone based on vehicle distance `d` from track centerline. */
   function surfaceZone(track, d) {
     if (d <= track.HALF_WIDTH) return 'tarmac';
     if (d <= track.CURB_HW) return 'curb';
@@ -115,42 +149,38 @@ GAME.Physics = (function () {
     return 'gravel';
   }
 
+  /** Global weather multiplier scaling total track grip. */
   var weatherGripMul = 1.0;
   function setWeatherGrip(mul) { weatherGripMul = safeNum(mul, 1); }
 
   // =========================================================================
-  // 2. tuning — every number that shapes handling, grouped by subsystem
+  // 2. TUNING CONFIGURATION
   // =========================================================================
-  var tuning = {
 
-    // World-unit <-> real-world conversion. Tracks/positions stay in "world
-    // units" (unchanged elsewhere in the game); the simulation itself works
-    // in real SI units (kg, metres, seconds, Newtons) and converts at the
-    // boundary, so tuning below reads like a real car.
+  var tuning = {
+    // World space to display scaling conversion
     scale: {
       groundCoverageMult: 1.25,
       baseKmhPerUnit: 0.54
     },
-    // Used only to normalise speedFraction()/HUD-facing 0..1 values and the
-    // camera-shake curve — the *actual* top speed emerges from the engine,
-    // gearing, aero and drag below, so this is a reference, not a cap.
     reference: { topSpeedKmh: 360 },
 
-  vehicle: {
-      mass: 650,                  // Lightweight chassis for immediate directional changes
-      cgHeight: 0.15,             // Low center of gravity eliminates suspension roll delays
-      wheelbaseFront: 1.62,
-      wheelbaseRear: 1.68,
-      trackWidth: 1.70,
-      yawInertia: 1000,            // Low rotational inertia so the car turns on a dime
-      driveType: 'AWD'            // Ensures uniform traction under throttle
+    // Vehicle dimensions & mass properties
+    vehicle: {
+      mass: 650,               // Total dry mass (kg)
+      cgHeight: 0.15,          // Center of gravity height (m)
+      wheelbaseFront: 1.62,    // Distance CG to front axle (m)
+      wheelbaseRear: 1.68,     // Distance CG to rear axle (m)
+      trackWidth: 1.70,        // Axle width (m)
+      yawInertia: 1000,        // Yaw moment of inertia (kg*m^2)
+      driveType: 'AWD'         // Drivetrain: 'FWD', 'RWD', or 'AWD'
     },
 
+    // Engine power curve parameters
     engine: {
       idleRpm: 1200,
       redlineRpm: 12000,
-      frictionTorque: 40,
-      // Curve matches the 15 m/s² launch down to 2 m/s² top-end acceleration
+      frictionTorque: 40,      // Engine braking resistance (Nm)
       torqueCurve: [
         { rpm: 1200, torque: 350 }, { rpm: 4000, torque: 580 },
         { rpm: 7000, torque: 620 }, { rpm: 9000, torque: 500 },
@@ -158,125 +188,133 @@ GAME.Physics = (function () {
       ]
     },
 
+    // Gearbox & differentials
     drivetrain: {
       gearRatios: [3.8, 2.9, 2.3, 1.9, 1.6, 1.35, 1.15, 1.0],
       finalDrive: 3.6,
       efficiency: 0.98,
       shiftUpRpm: 11500,
       shiftDownRpm: 6000,
-      shiftCooldown: 0.05,
-      diffLock: 0.15,             // Low diff lock so inner/outer wheels turn freely in tight bends
+      shiftCooldown: 0.05,     // Lockout time between shifts (seconds)
+      diffLock: 0.35,          // Differential locking ratio
       diffCouplingGain: 50,
       reverseTorque: 600,
-      awdFrontFraction: 0.60      // 50/50 power split
+      awdFrontFraction: 0.60  // AWD front/rear torque split ratio
     },
 
+    // Tire model & degradation rates
     tires: {
-      radius: 0.33,
-      inertia: 1.2,
+      radius: 0.33,            // Wheel radius (m)
+      inertia: 1.2,           // Rotational inertia of wheel (kg*m^2)
       rollingResistance: 0.010,
-      longB: 15, longC: 1.6, longE: -0.3,
-      latB: 14, latC: 1.8, latE: 0.0,       // Ultra-high lateral stiffness (instant turn response)
-      peakMu: 8.50,                // Recreates the ~9.2g grip ceiling from physics.js
+      longB: 15, longC: 1.6, longE: -0.3, // Pacejka longitudinal parameters
+      latB: 14, latC: 1.8, latE: 0.0,    // Pacejka lateral parameters
+      peakMu: 8.50,           // Peak coefficient of friction
       optimalTempC: 95,
-      tempWindowC: 100,            // Disables temperature-based grip loss
+      tempWindowC: 100,
       warmupPerKJ: 0.0,
       coolRatePerSec: 0.0,
       wearPerKJ: 0.0,
       wearGripLoss: 0.0
     },
 
+    // Aerodynamics
     aero: {
       dragCoeff: 0.45,
       frontalArea: 1.5,
-      liftCoeff: 3.5,
-      frontAeroBalance: 0.32,       // Perfectly balanced downforce
+      liftCoeff: 3.5,          // Downforce coefficient
+      frontAeroBalance: 0.32,  // Front downforce percentage
       airDensity: 1.225
     },
 
+    // Brakes
     brakes: {
-      maxTorque: 2600,              // Nm, combined front+rear reference
-      frontBias: 0.60
+      maxTorque: 2600,         // Total brake torque capacity (Nm)
+      frontBias: 0.60          // Front-to-rear brake distribution
     },
 
+    // Suspension load transfer dynamics
     suspension: {
-      weightTransferSmoothing: 6.0,// Instantaneous weight transfer removes turn-in slop
+      weightTransferSmoothing: 6.0,
       rollStiffnessFrontFrac: 0.75
     },
 
+    // Steering speed sensitivity & response
     steering: {
-      maxAngleDeg: 32,              // Deep angle matching the old turnRate
-      speedSensitivity: 0.005,      // Keeps full steering authority even at 360 km/h
-      rateIn: 3.8,                  // Direct turn-in matching steerIn: 4.25
-      rateOut: 6.5                // Fast self-centering matching steerOut: 7.0
+      maxAngleDeg: 30,
+      speedSensitivity: 0.005,
+      rateIn: 3.8,
+      rateOut: 6.5
     },
 
+    // Electronic Driving Assists
     assists: {
       abs: true,
       absSlipTarget: -0.12,
       tractionControl: true,
-      tcSlipTarget: 0.05,          // Raised to 0.20 to utilize the higher traction limit
+      tcSlipTarget: 0.10,
       stabilityControl: true,
-      escGain: 1.2,                
+      escGain: 1.20,
       autoGear: true
     },
 
     environment: {
       gravity: 9.81,
-      windX: 0, windZ: 0,           // world-frame wind, m/s — for future weather
+      windX: 0, windZ: 0,
       ambientTempC: 25
     },
 
     fuel: {
       capacityL: 110,
-      density: 0.75,                // kg/L, used only for mass effect
+      density: 0.75,
       startFraction: 0.55,
-      consumptionPerKJ: 0.000006    // litres consumed per kJ of drive energy
+      consumptionPerKJ: 0.000006
     },
 
     collision: {
       restitution: 0.35,
       tangentFriction: 0.55,
       yawKickGain: 0.05,
-      minWallSpeedForEvent: 3       // m/s, below this a "wallHit" event doesn't fire
+      minWallSpeedForEvent: 3
     },
 
+    // OFF-TRACK / GRASS MECHANICS (integrated from physics_2.js)
     offTrack: {
-      dragDecel: 12.0,            // Speed scrub (m/s²) when on grass/gravel (rapid slowdown)
-      accelMul: 0.30,             // Throttle power cut to 30% off-track
-      gripMult: 0.25              // Reduces tire grip to 25% off-track so you can't corner fast
+      accelMul: 0.55,        // Throttle effectiveness on grass/runoff
+      drag: 0.10,            // Speed drag decay rate per second off tarmac
+      gripLoss: 0.10,        // Rate of tire dirtying/grip loss per frame off track
+      gripRecover: 0.001,    // Rate of tire cleaning/grip recovery per frame on tarmac
+      gripFloor: 0.20        // Minimum friction multiplier floor for dirty tires
     },
 
-    // per-zone grip/rolling-resistance table; swap out via registerSurfaceSet
     surfaces: SURFACE_SETS.default,
-
-    minWheelLoad: 40                // N, keeps a "lifted" wheel from a divide-by-zero
+    minWheelLoad: 40
   };
 
   // =========================================================================
-  // 3. derived cache — recomputed by refresh(), never edited directly
+  // 3. DERIVED CACHE & RECALCULATION
   // =========================================================================
+
   var d = {};
+
+  /** Recomputes derived cache parameters when core tuning variables change. */
   function refresh() {
     var v = tuning.vehicle, sc = tuning.scale;
-
     d.kmhPerUnit = sc.baseKmhPerUnit / sc.groundCoverageMult;
     d.mpsPerUnit = d.kmhPerUnit / 3.6;
-    d.maxSpeedRef = tuning.reference.topSpeedKmh / d.kmhPerUnit; // world units/sec, normalisation only
-
+    d.maxSpeedRef = tuning.reference.topSpeedKmh / d.kmhPerUnit;
     d.wheelbase = v.wheelbaseFront + v.wheelbaseRear;
     d.yawInertia = v.yawInertia || (v.mass * (d.wheelbase * d.wheelbase + v.trackWidth * v.trackWidth) / 12) * 1.15;
-
     d.torqueCurve = tuning.engine.torqueCurve.slice().sort(function (a, b) { return a.rpm - b.rpm; });
     d.gearCount = tuning.drivetrain.gearRatios.length;
-
     d.fuelStartL = tuning.fuel.capacityL * tuning.fuel.startFraction;
   }
   refresh();
 
   // =========================================================================
-  // 4. events + extension hooks — so future features can bolt on cleanly
+  // 4. EVENT SYSTEM & EXTENSIONS
   // =========================================================================
+
   var listeners = {};
   function on(evt, fn) { (listeners[evt] = listeners[evt] || []).push(fn); }
   function off(evt, fn) {
@@ -287,48 +325,46 @@ GAME.Physics = (function () {
     var l = listeners[evt]; if (!l) return;
     for (var i = 0; i < l.length; i++) { try { l[i](payload); } catch (e) {} }
   }
+
   var extensions = [];
   function registerExtension(fn) { extensions.push(fn); }
 
   // =========================================================================
-  // 5. car state
+  // 5. CAR STATE MANAGEMENT
   // =========================================================================
-  // Wheel order used throughout: 0 = FL, 1 = FR, 2 = RL, 3 = RR.
+
+  /**
+   * Instantiates a new vehicle dynamic state object.
+   * Wheel Indices: [0: Front-Left, 1: Front-Right, 2: Rear-Left, 3: Rear-Right]
+   */
   function createCar() {
     return {
-      // ---- external contract: read by game.js / hud.js / multiplayer.js ----
-      x: 0, y: 0, angle: 0,
-      vf: 0, vl: 0,             // body-frame forward/lateral speed, world units/sec
-      steer: 0,                  // smoothed steering input, -1..1
-      wvx: 0, wvy: 0, av: 0,     // world-frame velocity + yaw rate (multiplayer sync)
-      gripHealth: 1,              // aggregate available-grip fraction, 0..1
+      x: 0, y: 0, angle: 0,       // Position & orientation in world space
+      vf: 0, vl: 0,               // Forward and lateral velocities (world units/s)
+      steer: 0,                   // Steering input state (-1 to +1)
+      wvx: 0, wvy: 0, av: 0,      // World velocity vectors & angular velocity
+      gripHealth: 1,              // Off-track tire health factor (0.2 to 1.0)
 
-      // ---- engine / drivetrain ----
       rpm: tuning.engine.idleRpm,
       gear: 1,
       reversing: false,
       shiftCooldown: 0,
 
-      // ---- per-wheel dynamic state ----
-      wheelOmega: [0, 0, 0, 0],       // rad/s
-      wheelLoad: [0, 0, 0, 0],        // N
-      wheelSlipRatio: [0, 0, 0, 0],
-      wheelSlipAngle: [0, 0, 0, 0],
-      tireTemp: [25, 25, 25, 25],     // deg C
-      tireWear: [0, 0, 0, 0],         // 0..1
+      wheelOmega: [0, 0, 0, 0],     // Rotational velocity per wheel (rad/s)
+      wheelLoad: [0, 0, 0, 0],      // Vertical load force per wheel (N)
+      wheelSlipRatio: [0, 0, 0, 0], // Longitudinal slip ratio
+      wheelSlipAngle: [0, 0, 0, 0], // Lateral slip angle (rad)
+      tireTemp: [25, 25, 25, 25],   // Tire core temperature (C)
+      tireWear: [0, 0, 0, 0],       // Tire wear percentage (0 to 1)
 
-      // ---- weight-transfer state (smoothed, suspension-like lag) ----
-      lastAx: 0, lastAy: 0,           // m/s^2, previous substep's body accel
-
-      // ---- consumables / condition ----
+      lastAx: 0, lastAy: 0,        // Smoothed accelerations for weight transfer
       fuel: d.fuelStartL,
-      damage: 0,                       // 0..1, reserved for a future damage model
-
-      // ---- diagnostics, safe to read from anywhere (HUD, telemetry, AI) ----
+      damage: 0,
       telemetry: {}
     };
   }
 
+  /** Resets vehicle state and places it at a designated starting slot. */
   function placeAt(car, slot) {
     car.x = slot.x; car.y = slot.y; car.angle = slot.angle;
     car.vf = 0; car.vl = 0; car.steer = 0;
@@ -355,10 +391,12 @@ GAME.Physics = (function () {
   }
 
   // =========================================================================
-  // 6. the core integrator — advances the car by one small, fixed sub-step
+  // 6. CORE INTEGRATION & SUBSTEPPING
   // =========================================================================
-  var MAX_SUBSTEP = 1 / 120;
 
+  var MAX_SUBSTEP = 1 / 120; // Force step resolution ceiling for stability
+
+  /** Calculates effective grip multiplier based on tire temperature and cumulative wear. */
   function tireGripMultiplier(tempC, wear) {
     var tw = tuning.tires;
     var tempLoss = clamp(Math.abs(tempC - tw.optimalTempC) / tw.tempWindowC, 0, 1) * 0.4;
@@ -366,29 +404,46 @@ GAME.Physics = (function () {
     return clamp(1 - tempLoss - wearLoss, 0.25, 1);
   }
 
+  /**
+   * Single discrete substep of the physics engine.
+   * Handles weight transfer, off-track grip degradation, Pacejka tire forces, 
+   * powertrain/drivetrain dynamics, aerodynamic downforce, and barrier impacts.
+   */
   function substep(car, keys, track, dt) {
     var V = tuning.vehicle, E = tuning.engine, DT = tuning.drivetrain, TP = tuning.tires,
         A = tuning.aero, B = tuning.brakes, ST = tuning.steering, AS = tuning.assists,
-        ENV = tuning.environment, SUS = tuning.suspension;
+        ENV = tuning.environment, SUS = tuning.suspension, OT = tuning.offTrack;
 
-    // ---- where are we, and what are we driving on -------------------------
+    // -----------------------------------------------------------------------
+    // STEP A: Surface & Off-Track Detection
+    // -----------------------------------------------------------------------
     var info0 = track.nearestTrackInfo(car.x, car.y);
     var surf = surfaceSetFor(track);
     var zone = surfaceZone(track, info0.point.d);
     var zoneDef = surf[zone] || surf.tarmac;
-    var offTrack = info0.point.d > track.HALF_WIDTH - 4;
+    var offTrack = info0.point.d > (track.HALF_WIDTH - 4);
 
     var mass = V.mass + car.fuel * tuning.fuel.density;
     var a = V.wheelbaseFront, b = V.wheelbaseRear, tw = V.trackWidth;
 
-    // ---- convert persistent state into real (SI) units for this step ------
-    var vf = car.vf * d.mpsPerUnit;   // forward speed, m/s
-    var vl = car.vl * d.mpsPerUnit;   // lateral (rightward) speed, m/s
-    var av = car.av;                   // yaw rate, rad/s (unit-independent)
+    var vf = car.vf * d.mpsPerUnit;
+    var vl = car.vl * d.mpsPerUnit;
+    var av = car.av;
+
+    // Off-track speed drag & progressive tire dirtying logic
+    var frameScale = dt * 60; 
+    if (offTrack) {
+      vf -= vf * OT.drag * dt; // Velocity-dependent drag scrub
+      car.gripHealth = Math.max(OT.gripFloor, car.gripHealth - OT.gripLoss * frameScale);
+    } else {
+      car.gripHealth = Math.min(1.0, car.gripHealth + OT.gripRecover * frameScale);
+    }
 
     var vxSafe = Math.abs(vf) < 0.6 ? (vf >= 0 ? 0.6 : -0.6) : vf;
 
-    // ---- steering -----------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // STEP B: Steering Lock & Slip Angles
+    // -----------------------------------------------------------------------
     var maxAngle = deg2rad(ST.maxAngleDeg) / (1 + Math.abs(vf) * ST.speedSensitivity);
     var steerTarget = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
     var rate = (steerTarget === 0) ? ST.rateOut : ST.rateIn;
@@ -396,56 +451,67 @@ GAME.Physics = (function () {
     if (Math.abs(car.steer) < 0.001) car.steer = 0;
     var delta = car.steer * maxAngle;
 
-    // ---- slip angles, front and rear axle -----------------------------------
+    // Kinematic slip angles per axle
     var vlF = vl + av * a, vlR = vl - av * b;
     var absVx = Math.abs(vxSafe);
     var dir = sign(vxSafe) || 1;
     var alphaF = clamp(delta * dir - Math.atan2(vlF, absVx), -1.3, 1.3);
     var alphaR = clamp(-Math.atan2(vlR, absVx), -1.3, 1.3);
 
-    // ---- weight transfer (uses last step's accel — a one-frame lag stands
-    // in for suspension compliance so load doesn't snap instantly) ----------
+    // -----------------------------------------------------------------------
+    // STEP C: Dynamic Load & Aero Downforce Distribution
+    // -----------------------------------------------------------------------
     var g = ENV.gravity;
     var wfStatic = mass * g * b / (a + b), wrStatic = mass * g * a / (a + b);
+    
+    // Longitudinal load transfer under acceleration/braking
     var longTransfer = mass * car.lastAx * V.cgHeight / (a + b);
     var speedSq = vf * vf + vl * vl;
     var downforce = 0.5 * A.airDensity * A.liftCoeff * A.frontalArea * speedSq;
+    
     var wf = wfStatic - longTransfer + downforce * A.frontAeroBalance;
     var wr = wrStatic + longTransfer + downforce * (1 - A.frontAeroBalance);
 
+    // Lateral load transfer under cornering
     var latTransferTotal = mass * car.lastAy * V.cgHeight / tw;
     var latF = latTransferTotal * SUS.rollStiffnessFrontFrac;
     var latR = latTransferTotal * (1 - SUS.rollStiffnessFrontFrac);
 
     var minLoad = tuning.minWheelLoad;
     var loads = [
-      Math.max(minLoad, wf / 2 + latF),   // FL
-      Math.max(minLoad, wf / 2 - latF),   // FR
-      Math.max(minLoad, wr / 2 + latR),   // RL
-      Math.max(minLoad, wr / 2 - latR)    // RR
+      Math.max(minLoad, wf / 2 + latF), // Front-Left
+      Math.max(minLoad, wf / 2 - latF), // Front-Right
+      Math.max(minLoad, wr / 2 + latR), // Rear-Left
+      Math.max(minLoad, wr / 2 - latR)  // Rear-Right
     ];
     car.wheelLoad = loads;
 
-    // ---- per-wheel effective grip: surface * weather * temperature * wear -
+    // -----------------------------------------------------------------------
+    // STEP D: Effective Tire Grip Calculation
+    // -----------------------------------------------------------------------
     var muEff = [0, 0, 0, 0];
     for (var wi = 0; wi < 4; wi++) {
-      muEff[wi] = TP.peakMu * zoneDef.muMul * weatherGripMul *
+      // Combines surface type, weather, tire temp, wear, and off-track gripHealth
+      muEff[wi] = TP.peakMu * zoneDef.muMul * weatherGripMul * car.gripHealth *
         tireGripMultiplier(car.tireTemp[wi], car.tireWear[wi]);
     }
 
-    // ---- throttle / brake / reverse state machine --------------------------
-    var throttle = keys.up ? 1 : 0;
+    // -----------------------------------------------------------------------
+    // STEP E: Throttle, Gearbox & Assist Control
+    // -----------------------------------------------------------------------
+    var accelMul = offTrack ? OT.accelMul : 1.0;
+    var throttle = (keys.up ? 1 : 0) * accelMul;
     var brakeIn = keys.down ? 1 : 0;
-    if (brakeIn && vf <= 1.0) car.reversing = true;
-    if (throttle || vf > 2.0) car.reversing = false;
 
-    // ---- engine + gearbox (forward driving only; reverse bypasses this) ---
+    if (brakeIn && vf <= 1.0) car.reversing = true;
+    if (throttle > 0 || vf > 2.0) car.reversing = false;
+
     var drivenIdx = (V.driveType === 'FWD') ? [0, 1] : (V.driveType === 'AWD') ? [0, 1, 2, 3] : [2, 3];
     var drivenOmegaAvg = 0;
     for (var di = 0; di < drivenIdx.length; di++) drivenOmegaAvg += car.wheelOmega[drivenIdx[di]];
     drivenOmegaAvg /= drivenIdx.length;
 
-    var driveTorque = [0, 0, 0, 0]; // per wheel, Nm
+    var driveTorque = [0, 0, 0, 0];
     car.shiftCooldown = Math.max(0, car.shiftCooldown - dt);
 
     if (!car.reversing) {
@@ -453,6 +519,7 @@ GAME.Physics = (function () {
       var engineOmega = Math.abs(drivenOmegaAvg) * ratio * DT.finalDrive;
       car.rpm = clamp(engineOmega * 60 / (2 * Math.PI), E.idleRpm, E.redlineRpm * 1.03);
 
+      // Automatic Transmission Logic
       if (AS.autoGear && car.shiftCooldown <= 0) {
         if (car.rpm > DT.shiftUpRpm && car.gear < d.gearCount) {
           car.gear++; car.shiftCooldown = DT.shiftCooldown; emit('gearShift', { car: car, gear: car.gear });
@@ -462,10 +529,11 @@ GAME.Physics = (function () {
       }
 
       var engineTorque = interpCurve(d.torqueCurve, car.rpm) * throttle;
-      if (throttle < 0.05) engineTorque -= E.frictionTorque; // engine braking
+      if (throttle < 0.05) engineTorque -= E.frictionTorque;
 
       var wheelTorqueTotal = engineTorque * ratio * DT.finalDrive * DT.efficiency;
 
+      // Torque Distribution across Differentials
       if (V.driveType === 'AWD') {
         var frontTotal = wheelTorqueTotal * DT.awdFrontFraction;
         var rearTotal = wheelTorqueTotal * (1 - DT.awdFrontFraction);
@@ -475,8 +543,7 @@ GAME.Physics = (function () {
         applyDiff(driveTorque, drivenIdx, wheelTorqueTotal, car, DT);
       }
 
-      // traction control: trims torque on a driven wheel that is spinning
-      // faster than the tyre can put down
+      // Traction Control System (TCS)
       if (AS.tractionControl && throttle > 0) {
         for (var ti = 0; ti < drivenIdx.length; ti++) {
           var wIdx = drivenIdx[ti];
@@ -494,7 +561,7 @@ GAME.Physics = (function () {
       for (var ri = 0; ri < drivenIdx.length; ri++) driveTorque[drivenIdx[ri]] = revTorque / drivenIdx.length;
     }
 
-    // ---- brakes (front/rear bias), with ABS trimming lock-up --------------
+    // Anti-lock Braking System (ABS)
     var brakeTorque = [0, 0, 0, 0];
     if (brakeIn && !car.reversing) {
       var frontEach = B.maxTorque * B.frontBias * brakeIn / 2;
@@ -512,8 +579,10 @@ GAME.Physics = (function () {
       }
     }
 
-    // ---- per-wheel tyre forces + wheel spin-up/down -------------------------
-    var offsets = [ // [longitudinal offset from CG, lateral offset], metres
+    // -----------------------------------------------------------------------
+    // STEP F: Wheel Mechanics & Pacejka Evaluation
+    // -----------------------------------------------------------------------
+    var offsets = [
       [a, -tw / 2], [a, tw / 2], [-b, -tw / 2], [-b, tw / 2]
     ];
     var bumpAmp = zoneDef.bumpiness;
@@ -529,15 +598,13 @@ GAME.Physics = (function () {
       var tf = combinedTireForce(kappa, alpha, loads[i], muEff[i], TP);
       var fxWheel = tf.Fx, fyWheel = tf.Fy;
 
-      // a little random texture on curbs/grass so they feel different, not
-      // just "less grippy"
+      // Surface roughness perturbation
       if (bumpAmp > 0) fyWheel += (Math.random() - 0.5) * bumpAmp * loads[i] * 0.08;
 
-      // rolling resistance, applied directly as a small opposing force
       var rr = -sign(kappaRef) * TP.rollingResistance * zoneDef.rollMul * loads[i];
       fxWheel += rr;
 
-      // rotate the front wheels' force into the body frame by the steer angle
+      // Transform front wheels lateral/longitudinal forces into body coordinates
       var fxBodyWheel, fyBodyWheel;
       if (isFront) {
         fxBodyWheel = fxWheel * Math.cos(delta) - fyWheel * Math.sin(delta);
@@ -547,15 +614,14 @@ GAME.Physics = (function () {
       }
 
       FxBody += fxBodyWheel; FyBody += fyBodyWheel;
-      // 2D moment about the CG for a force at (x0, y0) in body (forward,right) axes
       Mtotal += offsets[i][0] * fyBodyWheel - offsets[i][1] * fxBodyWheel;
 
-      // wheel rotational dynamics
+      // Wheel rotational acceleration calculation
       var reactionTorque = fxWheel * TP.radius;
       var domega = (driveTorque[i] - sign(car.wheelOmega[i]) * brakeTorque[i] - reactionTorque) / TP.inertia;
       car.wheelOmega[i] += domega * dt;
 
-      // thermal + wear bookkeeping
+      // Energy calculation for tire thermal dynamics & wear
       var slipPowerW = Math.abs(fxWheel * kappa * kappaRef) + Math.abs(fyWheel * alpha * kappaRef);
       var slipEnergyKJ = Math.abs(slipPowerW) * dt / 1000;
       totalSlipEnergy += slipEnergyKJ;
@@ -569,27 +635,27 @@ GAME.Physics = (function () {
       car.wheelSlipAngle[i] = alpha;
     }
 
-    // ---- aerodynamic drag (opposes motion relative to the wind) -----------
+    // Aerodynamic Drag
     var windForwardComp = ENV.windX * Math.cos(car.angle) + ENV.windZ * Math.sin(car.angle);
     var relVf = vf - windForwardComp;
     var drag = 0.5 * A.airDensity * A.dragCoeff * A.frontalArea * relVf * Math.abs(relVf);
     FxBody -= drag;
 
-    // ---- stability control: a small corrective yaw moment when the car is
-    // rotating faster than the tyres can be generating on their own -------
+    // Electronic Stability Control (ESC)
     if (AS.stabilityControl) {
       var yawDemand = Math.abs(delta) > 0.001 ? (vxSafe / Math.max(a + b, 0.1)) * Math.tan(delta) : 0;
       var yawError = av - yawDemand;
       Mtotal -= yawError * AS.escGain * d.yawInertia * 1.5;
     }
 
-    // ---- integrate body-frame velocity + yaw (coupled rotating-frame terms) -
+    // -----------------------------------------------------------------------
+    // STEP G: Rigid Body Equations of Motion Integration
+    // -----------------------------------------------------------------------
     var ax = FxBody / mass, ay = FyBody / mass;
     vf += (ax + av * vl) * dt;
     vl += (ay - av * vf) * dt;
     av += (Mtotal / d.yawInertia) * dt;
 
-    // safety clamps so a stiff transient can't explode the integration
     vf = clamp(safeNum(vf, 0), -60, d.maxSpeedRef * d.mpsPerUnit * 1.3);
     vl = clamp(safeNum(vl, 0), -45, 45);
     av = clamp(safeNum(av, 0), -6, 6);
@@ -602,7 +668,7 @@ GAME.Physics = (function () {
     car.vf = vf / d.mpsPerUnit;
     car.vl = vl / d.mpsPerUnit;
 
-    // ---- position integration (world units, unchanged scale) --------------
+    // Position updates in world coordinate frame
     var fwX = Math.cos(car.angle), fwY = Math.sin(car.angle);
     var rgX = -Math.sin(car.angle), rgY = Math.cos(car.angle);
     var wvx = fwX * car.vf + rgX * car.vl;
@@ -611,7 +677,9 @@ GAME.Physics = (function () {
     car.x += wvx * dt;
     car.y += wvy * dt;
 
-    // ---- barrier collision (impulse-based, mass and restitution aware) ----
+    // -----------------------------------------------------------------------
+    // STEP H: Track Barrier Impulse & Collision Resolution
+    // -----------------------------------------------------------------------
     var info = track.nearestTrackInfo(car.x, car.y);
     var limit = track.BARRIER_HW - track.CAR_RADIUS;
     if (info.point.d > limit) {
@@ -622,10 +690,9 @@ GAME.Physics = (function () {
 
       var outward = wvx * nx + wvy * ny;
       if (outward > 0) {
-        var impactSpeed = outward; // world units/sec, roughly m/s scale via mpsPerUnit
+        var impactSpeed = outward;
         var nvx = wvx - nx * outward * (1 + tuning.collision.restitution);
         var nvy = wvy - ny * outward * (1 + tuning.collision.restitution);
-        // tangential scrub
         var tx = -ny, ty = nx;
         var tangential = nvx * tx + nvy * ty;
         nvx -= tx * tangential * tuning.collision.tangentFriction;
@@ -644,27 +711,24 @@ GAME.Physics = (function () {
 
     car.wvx = wvx; car.wvy = wvy;
 
-    // ---- fuel + aggregate grip health ---------------------------------------
+    // -----------------------------------------------------------------------
+    // STEP I: Telemetry & Fuel Consumption
+    // -----------------------------------------------------------------------
     var fuelUsed = (totalDriveWork + totalSlipEnergy * 0.15) * tuning.fuel.consumptionPerKJ;
     car.fuel = Math.max(0, car.fuel - fuelUsed);
     if (car.fuel < d.fuelStartL * 0.1) emit('lowFuel', { car: car, fuel: car.fuel });
-
-    var avgMu = (muEff[0] + muEff[1] + muEff[2] + muEff[3]) / 4;
-    car.gripHealth = clamp(avgMu / TP.peakMu, 0, 1);
 
     car.telemetry = {
       rpm: car.rpm, gear: car.reversing ? -1 : car.gear,
       surface: zone, loads: loads.slice(), slipRatio: car.wheelSlipRatio.slice(),
       slipAngle: car.wheelSlipAngle.slice(), tireTemp: car.tireTemp.slice(),
-      tireWear: car.tireWear.slice(), fuel: car.fuel
+      tireWear: car.tireWear.slice(), fuel: car.fuel, gripHealth: car.gripHealth
     };
 
     return { info: info, prevX: prevX, prevY: prevY, offTrack: offTrack };
   }
 
-  // Limited-slip differential: splits torque evenly, then nudges it to pull
-  // the two wheel speeds together by `diffLock` — 0 behaves like an open
-  // diff (all torque can go to the spinning wheel), 1 behaves near-locked.
+  /** Distributes engine drive torque across axle differential. */
   function applyDiff(driveTorque, idxPair, total, car, DT) {
     var half = total / idxPair.length;
     if (idxPair.length === 2) {
@@ -678,8 +742,20 @@ GAME.Physics = (function () {
   }
 
   // =========================================================================
-  // 7. step() — the public entry point, sub-stepped for stability
+  // 7. PUBLIC INTEGRATOR STEP ENTRYPOINT
   // =========================================================================
+
+  /**
+   * Main step entrypoint for updating vehicle physics state.
+   * Divides incoming frame standard delta time (`dt`) into smaller fixed sub-steps
+   * to guarantee numerical stability at high speeds.
+   *
+   * @param {Object} car - The vehicle state instance.
+   * @param {Object} keys - Key input state object ({ up, down, left, right }).
+   * @param {Object} track - Track geometry instance.
+   * @param {number} dt - Frame time elapsed in seconds.
+   * @returns {{ info: Object, prevX: number, prevY: number, offTrack: boolean }} Step metadata.
+   */
   function step(car, keys, track, dt) {
     dt = clamp(safeNum(dt, 0), 0, 0.1);
     var n = Math.max(1, Math.ceil(dt / MAX_SUBSTEP));
@@ -688,12 +764,12 @@ GAME.Physics = (function () {
     var lastResult = null;
     var anyOffTrack = false;
 
-
     for (var s = 0; s < n; s++) {
       lastResult = substep(car, keys, track, sub);
       if (lastResult.offTrack) anyOffTrack = true;
     }
 
+    // Execute active extension hooks
     for (var e = 0; e < extensions.length; e++) {
       try { extensions[e](car, track, dt); } catch (ex) {}
     }
@@ -707,18 +783,22 @@ GAME.Physics = (function () {
   }
 
   // =========================================================================
-  // 8. readouts used by HUD/camera
+  // 8. READOUT HELPERS & CAR-TO-CAR COLLISIONS
   // =========================================================================
+
+  /** Returns absolute velocity in km/h. */
   function speedKmh(car) { return Math.hypot(car.vf, car.vl) * d.kmhPerUnit; }
+
+  /** Returns normalized ratio of top speed (0.0 to 1.0). */
   function speedFraction(car) { return clamp(Math.abs(car.vf) / d.maxSpeedRef, 0, 1); }
 
-  // =========================================================================
-  // 9. car-vs-car collision — not wired into the game loop yet (there is
-  // only ever one physically-simulated car per client today), but ready for
-  // local AI opponents or same-machine split screen without redesigning
-  // anything: an equal-mass elastic-ish impulse exchange along the contact
-  // normal, in world units.
-  // =========================================================================
+  /**
+   * Performs impulse resolution for car-to-car elastic collisions in multiplayer / AI mode.
+   *
+   * @param {Object} carA - First vehicle state.
+   * @param {Object} carB - Second vehicle state.
+   * @param {number} [restitution] - Coefficient of restitution override.
+   */
   function resolveCarCollision(carA, carB, restitution) {
     restitution = safeNum(restitution, tuning.collision.restitution);
     var dx = carB.x - carA.x, dy = carB.y - carA.y;
@@ -726,26 +806,27 @@ GAME.Physics = (function () {
     var nx = dx / dist, ny = dy / dist;
     var rvx = carB.wvx - carA.wvx, rvy = carB.wvy - carA.wvy;
     var rel = rvx * nx + rvy * ny;
-    if (rel >= 0) return; // separating already
-    var j = -(1 + restitution) * rel / 2; // equal mass assumption
+    if (rel >= 0) return;
+    var j = -(1 + restitution) * rel / 2;
     carA.wvx -= j * nx; carA.wvy -= j * ny;
     carB.wvx += j * nx; carB.wvy += j * ny;
     emit('wallHit', { car: carA, speed: Math.abs(rel) * d.mpsPerUnit });
     emit('wallHit', { car: carB, speed: Math.abs(rel) * d.mpsPerUnit });
   }
 
+  // =========================================================================
+  // EXPORT PUBLIC MODULE API
+  // =========================================================================
   return {
     tuning: tuning,
     derived: d,
     refresh: refresh,
     clamp: clamp,
-
     createCar: createCar,
     placeAt: placeAt,
     step: step,
     speedKmh: speedKmh,
     speedFraction: speedFraction,
-
     registerExtension: registerExtension,
     on: on,
     off: off,
