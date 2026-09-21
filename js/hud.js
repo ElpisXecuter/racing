@@ -35,7 +35,10 @@ GAME.Hud = (function () {
         font-family: 'Segoe UI', -apple-system, Roboto, sans-serif;
         color: #fff;
         z-index: 1000;
+        opacity: 0;
+        transition: opacity 0.25s ease;
       }
+      #hudTelemetryWrapper.hud-race-visible { opacity: 1; }
  
       /* ===================================================================
          1. BIRD'S-EYE CAR DIAGRAM (MIDDLE RIGHT)
@@ -44,14 +47,18 @@ GAME.Hud = (function () {
         position: absolute;
         top: 45%;
         right: 20px;
-        transform: translateY(-50%);
-        background: rgba(12, 16, 24, 0.78);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        backdrop-filter: blur(8px);
+        transform: translateY(-50%) translateX(0%);
+        background: rgba(12, 16, 24, 0.18);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        backdrop-filter: blur(6px);
         border-radius: 12px;
         padding: 14px 12px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
         width: 220px;
+        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      #hudCarDiagramOverlay.hud-status-tucked {
+        transform: translateY(-50%) translateX(160%);
       }
       .hud-diagram-title {
         font-size: 10px;
@@ -116,11 +123,11 @@ GAME.Hud = (function () {
         right: 20px;
         width: 210px;
         height: 210px;
-        background: rgba(12, 16, 24, 0.82);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        backdrop-filter: blur(10px);
+        background: rgba(12, 16, 24, 0.18);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        backdrop-filter: blur(6px);
         border-radius: 50%;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -356,6 +363,32 @@ GAME.Hud = (function () {
         wear: document.getElementById('hudWear' + i)
       });
     }
+
+    el.hudTopLeft = document.getElementById('hudTopLeft');
+    el.hudTelemetryWrapper = document.getElementById('hudTelemetryWrapper');
+    el.hudCarDiagramOverlay = document.getElementById('hudCarDiagramOverlay');
+  }
+
+  // ---- vehicle status panel: tuck away off the right edge on demand ----------
+  var statusTucked = false;
+  function toggleVehicleStatus() {
+    statusTucked = !statusTucked;
+    if (el.hudCarDiagramOverlay) el.hudCarDiagramOverlay.classList.toggle('hud-status-tucked', statusTucked);
+  }
+
+  // ---- race-only visibility --------------------------------------------------
+  // The lap/time card (top-left) and the telemetry dial + wheel-status card
+  // (bottom-right) should only be on screen once a race is actually running —
+  // not in menus, the lobby, the countdown, or the post-race results screen
+  // (which the telemetry card would otherwise float on top of).
+  // GAME.Hud.update() is only ever called on a 'racing' frame or at specific
+  // non-racing transition points (waiting screen, boot, menu option changes),
+  // so checking the state here whenever update() runs is enough to stay in
+  // sync without needing extra hooks elsewhere.
+  function updateRaceVisibility() {
+    var show = GAME.State.state === 'racing';
+    if (el.hudTopLeft) el.hudTopLeft.classList.toggle('hud-race-visible', show);
+    if (el.hudTelemetryWrapper) el.hudTelemetryWrapper.classList.toggle('hud-race-visible', show);
   }
  
   // ---- formatting helpers ---------------------------------------------------
@@ -394,6 +427,8 @@ GAME.Hud = (function () {
  
   // ---- main HUD & physics telemetry update -----------------------------------
   function update(curLapMs) {
+    updateRaceVisibility();
+
     var S = GAME.State;
     var laps = GAME.Config.race.totalLaps;
     if (el.lapCount) el.lapCount.textContent = Math.min(S.lapCount + 1, laps) + ' / ' + laps;
@@ -633,6 +668,7 @@ GAME.Hud = (function () {
     renderStandings: renderStandings,
     renderResults: renderResults, hideResults: hideResults,
     setNameLabel: setNameLabel, clearNameLabels: clearNameLabels,
-    refreshNameLabels: refreshNameLabels, updateNameLabels: updateNameLabels
+    refreshNameLabels: refreshNameLabels, updateNameLabels: updateNameLabels,
+    toggleVehicleStatus: toggleVehicleStatus
   };
 })();
