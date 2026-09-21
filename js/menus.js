@@ -108,6 +108,7 @@ GAME.Menus = (function () {
       el.addEventListener('click', function () {
         GAME.State.selectedUnitIndex = i;
         updateSelectionClasses();
+        refreshHud();
       });
       container.appendChild(el);
     });
@@ -124,6 +125,7 @@ GAME.Menus = (function () {
         GAME.State.selectedTempUnitIndex = i;
         GAME.Physics.setTempUnit(item.id);
         updateSelectionClasses();
+        refreshHud();
       });
       container.appendChild(el);
     });
@@ -145,6 +147,15 @@ GAME.Menus = (function () {
     });
     GAME.Hud.setUnitLabel(GAME.Config.units[S.selectedUnitIndex].name);
     GAME.Game.rebuildPlayerCar();
+  }
+
+  // GAME.Hud.update() is otherwise only driven by the race loop while
+  // S.state === 'racing', so without this, toggling a unit here (e.g.
+  // tyre/brake temp C/F) wouldn't show up until a race actually starts.
+  // Called only from the option click handlers below — never from init(),
+  // so it can't interfere with first-load setup.
+  function refreshHud() {
+    if (GAME.State.car) GAME.Hud.update(0);
   }
 
   // ---- navigation -----------------------------------------------------------
