@@ -45,6 +45,7 @@ GAME.Game = (function () {
   var wheelMeshes = [], frontWheelGroups = [], brakeLightMeshes = [];
   var trackCache = {};    // id -> { geom, trackGroup, sceneryGroup }
   var keys = { up: false, down: false, left: false, right: false };
+  var lookBack = false;   // true while Space is held — look backward instead of the view's normal direction
   var camPos, camLook, shakeTime = 0, shakeIntensity = 0;
   var lastT = 0;
 
@@ -172,12 +173,21 @@ GAME.Game = (function () {
         if (S.state === 'waiting') beginCountdown();
       } else if (e.code === 'KeyR' && S.state !== 'menu' && S.state !== 'mode' && !GAME.Net.isActive()) {
         enterWaiting();
+      } else if (e.code === 'KeyV') {
+        GAME.Hud.toggleVehicleStatus();
+      } else if (e.code === 'KeyC' && !e.repeat) {
+        var mode = GAME.CameraViews.cycle();
+        if (mode === 'chase') snapCameraToCar();  // avoid a big lerp jump back in
+      } else if (e.code === 'Space') {
+        e.preventDefault();  // don't let Space activate a focused button
+        lookBack = true;
       }
     }, { passive: false });
 
     window.addEventListener('keyup', function (e) {
       if (isTypingTarget(document.activeElement)) return;
       setKey(e.code, false);
+      if (e.code === 'Space') lookBack = false;
     });
 
     document.querySelectorAll('.tbtn').forEach(function (btn) {
@@ -265,6 +275,10 @@ GAME.Game = (function () {
 
   function finishRace() {
     S.state = 'finished';
+    // The per-frame loop only drives GAME.Hud.update() while state === 'racing',
+    // so tell it explicitly here — otherwise the race HUD stays visible,
+    // floating on top of the results screen, until a menu is next opened.
+    GAME.Hud.update(0);
     var total = GAME.Net.gameNow() - S.raceStartTime;
     var score = computeScore(total, S.bestLapMs);
     if (S.bestScore === null || score > S.bestScore) S.bestScore = score;
@@ -343,15 +357,10 @@ GAME.Game = (function () {
 
   function updateCamera(dt) {
     var cam = C.camera;
-    var fx = Math.cos(S.car.angle), fz = Math.sin(S.car.angle);
-    var targetPos = new THREE.Vector3(S.car.x - fx * cam.distanceBehind, cam.height, S.car.y - fz * cam.distanceBehind);
-    var targetLook = new THREE.Vector3(S.car.x + fx * cam.lookAhead, cam.lookHeight, S.car.y + fz * cam.lookAhead);
-    var s = 1 - Math.pow(cam.followSmoothing, dt);
-    camPos.lerp(targetPos, s);
-    camLook.lerp(targetLook, s);
 
     // screen shake while off the tarmac — eases in and out, and scales with
-    // speed so crawling on the grass barely shakes at all
+    // speed so crawling on the grass barely shakes at all. Shared by every
+    // view, chase or onboard, so the ride feels consistent either way.
     var shakeTarget = (S.state === 'racing' && S.offTrack) ? 1 : 0;
     shakeIntensity += (shakeTarget - shakeIntensity) * Math.min(1, dt * cam.shake.easeIn);
     shakeTime += dt * cam.shake.speed;
@@ -360,6 +369,19 @@ GAME.Game = (function () {
     var jx = Math.sin(shakeTime * 1.0) * amp;
     var jy = Math.sin(shakeTime * 1.37 + 1.1) * amp * 0.55;
     var jz = Math.cos(shakeTime * 0.83 + 0.6) * amp;
+
+    if (GAME.CameraViews.isOnboard()) {
+      GAME.CameraViews.applyOnboard(camera, S.car, lookBack, jx, jy, jz);
+      return;
+    }
+
+    var fx = Math.cos(S.car.angle), fz = Math.sin(S.car.angle);
+    var lookAhead = lookBack ? -cam.lookAhead : cam.lookAhead;   // hold Space to look behind instead of ahead
+    var targetPos = new THREE.Vector3(S.car.x - fx * cam.distanceBehind, cam.height, S.car.y - fz * cam.distanceBehind);
+    var targetLook = new THREE.Vector3(S.car.x + fx * lookAhead, cam.lookHeight, S.car.y + fz * lookAhead);
+    var s = 1 - Math.pow(cam.followSmoothing, dt);
+    camPos.lerp(targetPos, s);
+    camLook.lerp(targetLook, s);
 
     camera.position.set(camPos.x + jx, camPos.y + jy, camPos.z + jz);
     camera.lookAt(camLook.x + jx * 0.4, camLook.y + jy * 0.4, camLook.z + jz * 0.4);
