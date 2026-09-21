@@ -269,6 +269,11 @@ GAME.Physics = (function () {
       idleRpm: 1200,
       redlineRpm: 12000,
       frictionTorque: 40,
+      // Below this forward speed (m/s), off-throttle engine braking tapers
+      // to zero instead of staying constant — otherwise it keeps dragging
+      // the wheels backward past a stop and the car creeps into reverse
+      // on its own.
+      engineBrakeRampSpeed: 3,
       torqueCurve: [
         { rpm: 1200, torque: 350 }, { rpm: 4000, torque: 580 },
         { rpm: 7000, torque: 620 }, { rpm: 9000, torque: 500 },
@@ -298,6 +303,15 @@ GAME.Physics = (function () {
       peakMu: 8.50,
       optimalTempC: 95,
       tempWindowC: 40,
+      // Grip response to temperature: cold tyres grip poorly, grip builds as
+      // they warm toward optimalTempC, peaks with a bonus over baseline
+      // within peakHalfWidthC either side of it, then falls off again if
+      // they're pushed past that into overheating (tempWindowC further out).
+      coldTempC: 20,
+      coldEfficiency: 0.80,     // Stone-cold tyres have 80% grip
+      peakHalfWidthC: 18,       // Sweet spot spans optimalTempC +/- this
+      optimalEfficiency: 1.12,  // Grip bonus (+12%) once properly up to temp
+      overheatEfficiency: 0.55, // Badly overheated grip multiplier
       warmupPerKJ: 0.13,          // Longitudinal slip heating — used for BRAKING slip only now
       accelWarmupPerKJ: 0.03,     // Longitudinal slip heating for ACCELERATION/wheelspin — much lower, so throttle alone barely heats the tyre
       corneringWarmupPerKJ: 0.07, // Lateral slip heating factor (cornering) — heats up, but less aggressively than braking does
@@ -324,12 +338,12 @@ GAME.Physics = (function () {
       conductionToTire: 0.03,  // Pulled back down from 0.04 — now that tyres have their own accel-vs-braking split, they don't need as much help from brake conduction
       // Temperature Efficiency Curve
       coldTempC: 25,
-      coldEfficiency: 0.85,    // Cold brakes have 85% bite
+      coldEfficiency: 0.75,    // Cold brakes have 75% bite — was 0.85, widened for a more noticeable swing
       optimalTempMinC: 300,    // Sweet spot start
       optimalTempMaxC: 500,    // Sweet spot end
-      optimalEfficiency: 1.20, // Brakes work extra well (+20% torque) between 300C and 500C
+      optimalEfficiency: 1.35, // Brakes work extra well (+35% torque) between 300C and 500C — was 1.20
       fadeTempC: 1000,
-      fadeEfficiency: 0.60     // Thermal brake fade at 1000C
+      fadeEfficiency: 0.55     // Thermal brake fade at 1000C — was 0.60
     },
  
     suspension: {
@@ -529,15 +543,30 @@ GAME.Physics = (function () {
  
   /**
    * Calculates current tire friction multiplier based on wear degradation and thermal offset from ideal operating window.
+   * Cold tyres grip poorly, grip rises as they come up to temperature, peaks
+   * with a bonus over baseline in the sweet spot around optimalTempC, then
+   * falls off again if pushed into overheating.
    * @param {number} tempC - Tire carcass temperature in Celsius (°C).
    * @param {number} wear - Wear degradation factor normalized [0..1].
-   * @returns {number} Grip multiplier factor bounded within range [0.2, 1.0].
+   * @returns {number} Grip multiplier factor bounded within range [0.2, optimalEfficiency].
    */
   function tireGripMultiplier(tempC, wear) {
     var tw = tuning.tires;
-    var tempLoss = clamp(Math.abs(tempC - tw.optimalTempC) / tw.tempWindowC, 0, 1) * 0.35;
+    var peakMin = tw.optimalTempC - tw.peakHalfWidthC;
+    var peakMax = tw.optimalTempC + tw.peakHalfWidthC;
+    var tempMul;
+    if (tempC < peakMin) {
+      var tCold = clamp((tempC - tw.coldTempC) / (peakMin - tw.coldTempC), 0, 1);
+      tempMul = lerp(tw.coldEfficiency, tw.optimalEfficiency, tCold);
+    } else if (tempC <= peakMax) {
+      tempMul = tw.optimalEfficiency;
+    } else {
+      var overheatAt = peakMax + tw.tempWindowC;
+      var tHot = clamp((tempC - peakMax) / (overheatAt - peakMax), 0, 1);
+      tempMul = lerp(tw.optimalEfficiency, tw.overheatEfficiency, tHot);
+    }
     var wearLoss = wear * tw.wearGripLoss;
-    return clamp(1 - tempLoss - wearLoss, 0.20, 1.0);
+    return clamp(tempMul - wearLoss, 0.20, tw.optimalEfficiency);
   }
  
   /**
@@ -679,7 +708,12 @@ GAME.Physics = (function () {
       }
  
       var engineTorque = interpCurve(d.torqueCurve, car.rpm) * throttle;
-      if (throttle < 0.05) engineTorque -= E.frictionTorque;
+      if (throttle < 0.05) {
+        // Taper engine braking out as the car approaches a stop, so it can
+        // slow the car down but can't keep pushing past zero into reverse.
+        var brakeRampMul = clamp(vf / E.engineBrakeRampSpeed, 0, 1);
+        engineTorque -= E.frictionTorque * brakeRampMul;
+      }
  
       var wheelTorqueTotal = engineTorque * ratio * DT.finalDrive * DT.efficiency;
  
